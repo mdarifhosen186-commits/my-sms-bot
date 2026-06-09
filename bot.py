@@ -6,7 +6,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes, Conversation
 from datetime import datetime
 
 # ==================== Environment Variables ====================
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8947264322:AAGZyRaOVVmFCWUhoOHwsPAQVWXMVUeQ97g")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8947264322:AAGAfmgfzPxCzq_lHaAiSImEPteW20KIF78")
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "@Tg_Petshala")
 GROUP_ID = os.environ.get("GROUP_ID", "@Tg_Petshalaa")
 
