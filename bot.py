@@ -5,55 +5,36 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, ConversationHandler, MessageHandler, filters
 from datetime import datetime
 
-# ==================== কনফিগারেশন ====================
+# ==================== Environment Variables ====================
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8947264322:AAGZyRaOVVmFCWUhoOHwsPAQVWXMVUeQ97g")
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "@Tg_Petshala")
 GROUP_ID = os.environ.get("GROUP_ID", "@Tg_Petshalaa")
 
-# Admin IDs (comma-separated in env)
-ADMIN_IDS = [int(x) for x in os.environ.get("ADMIN_IDS", "1771051433").split(",") if x.strip()]
+# Admin IDs (comma-separated)
+admin_ids_str = os.environ.get("ADMIN_IDS", "1771051433")
+ADMIN_IDS = [int(x.strip()) for x in admin_ids_str.split(",") if x.strip()]
 
-# রেফারেল সেটিংস
-POINTS_PER_REFERRAL = 5
-POINTS_PER_SMS = 1
+POINTS_PER_REFERRAL = int(os.environ.get("POINTS_PER_REFERRAL", "5"))
+POINTS_PER_SMS = int(os.environ.get("POINTS_PER_SMS", "1"))
 
-# Conversation States
 BROADCAST_MESSAGE = 1
 
-# ==================== ডেটাবেজ ====================
-DB_PATH = os.environ.get("DB_PATH", "users.db")
-
+# ==================== Database Functions ====================
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
-    
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            username TEXT,
-            points INTEGER DEFAULT 0,
-            referred_by INTEGER,
-            join_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS sms_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            to_number TEXT,
-            message TEXT,
-            sent_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            status TEXT
-        )
-    ''')
-    
+    cursor.execute('''CREATE TABLE IF NOT EXISTS users (
+        user_id INTEGER PRIMARY KEY, username TEXT, points INTEGER DEFAULT 0,
+        referred_by INTEGER, join_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS sms_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, to_number TEXT,
+        message TEXT, sent_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP, status TEXT)''')
     conn.commit()
     conn.close()
 
 def get_user(user_id):
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
     user = cursor.fetchone()
@@ -61,7 +42,7 @@ def get_user(user_id):
     return user
 
 def add_user(user_id, username, referred_by=None):
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
     cursor.execute("INSERT OR IGNORE INTO users (user_id, username, referred_by) VALUES (?, ?, ?)",
                    (user_id, username, referred_by))
@@ -69,7 +50,7 @@ def add_user(user_id, username, referred_by=None):
     conn.close()
 
 def update_points(user_id, points):
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
     cursor.execute("UPDATE users SET points = points + ? WHERE user_id = ?", (points, user_id))
     conn.commit()
@@ -80,15 +61,14 @@ def get_points(user_id):
     return user[2] if user else 0
 
 def update_last_active(user_id):
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
-    cursor.execute("UPDATE users SET last_active = ? WHERE user_id = ?", 
-                   (datetime.now(), user_id))
+    cursor.execute("UPDATE users SET last_active = ? WHERE user_id = ?", (datetime.now(), user_id))
     conn.commit()
     conn.close()
 
 def get_all_users():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
     cursor.execute("SELECT user_id, username, points FROM users ORDER BY points DESC")
     users = cursor.fetchall()
@@ -96,85 +76,60 @@ def get_all_users():
     return users
 
 def get_stats():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
-    
     cursor.execute("SELECT COUNT(*) FROM users")
     total_users = cursor.fetchone()[0]
-    
     cursor.execute("SELECT SUM(points) FROM users")
     total_points = cursor.fetchone()[0] or 0
-    
     cursor.execute("SELECT COUNT(*) FROM sms_history WHERE status LIKE '%success%'")
     total_sms = cursor.fetchone()[0]
-    
     cursor.execute("SELECT COUNT(*) FROM users WHERE DATE(join_date) = DATE('now')")
     today_users = cursor.fetchone()[0]
-    
     conn.close()
-    return {
-        'users': total_users,
-        'points': total_points,
-        'sms_sent': total_sms,
-        'today_users': today_users
-    }
+    return {'users': total_users, 'points': total_points, 'sms_sent': total_sms, 'today_users': today_users}
 
 def log_sms(user_id, to_number, message, status):
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO sms_history (user_id, to_number, message, status)
-        VALUES (?, ?, ?, ?)
-    """, (user_id, to_number, message, status))
+    cursor.execute("INSERT INTO sms_history (user_id, to_number, message, status) VALUES (?, ?, ?, ?)",
+                   (user_id, to_number, message, status))
     conn.commit()
     conn.close()
 
-# ==================== Helper ====================
 def is_admin(user_id):
     return user_id in ADMIN_IDS
 
+# ==================== Helper Functions ====================
 async def check_membership(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    
     try:
         channel_member = await context.bot.get_chat_member(CHANNEL_ID, user_id)
         group_member = await context.bot.get_chat_member(GROUP_ID, user_id)
-        
         if channel_member.status in ['left', 'kicked'] or group_member.status in ['left', 'kicked']:
-            keyboard = [
-                [InlineKeyboardButton("📢 চ্যানেল জয়েন করুন", url="https://t.me/Tg_Petshala")],
-                [InlineKeyboardButton("👥 গ্রুপ জয়েন করুন", url="https://t.me/Tg_Petshalaa")],
-            ]
-            await update.message.reply_text(
-                "⚠️ বট ব্যবহার করতে প্রথমে আমাদের চ্যানেল ও গ্রুপে জয়েন করুন!\n\n"
-                "জয়েন করার পর আবার /start দিন।",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
+            keyboard = [[InlineKeyboardButton("📢 চ্যানেল", url=f"https://t.me/{CHANNEL_ID[1:]}")],
+                       [InlineKeyboardButton("👥 গ্রুপ", url=f"https://t.me/{GROUP_ID[1:]}")]]
+            await update.message.reply_text("⚠️ প্রথমে চ্যানেল ও গ্রুপে জয়েন করুন!\n\nজয়েন করার পর /start দিন।",
+                                           reply_markup=InlineKeyboardMarkup(keyboard))
             return False
     except Exception as e:
         print(f"Membership check error: {e}")
         return False
-    
     return True
 
-# ==================== User Commands ====================
+# ==================== Command Handlers ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     username = update.effective_user.username or "User"
-    
     update_last_active(user_id)
     
-    # রেফারেল চেক
     if context.args and context.args[0].startswith("ref_"):
         try:
             referred_by = int(context.args[0].split("_")[1])
             if referred_by != user_id and get_user(referred_by):
                 update_points(referred_by, POINTS_PER_REFERRAL)
                 try:
-                    await context.bot.send_message(
-                        referred_by,
-                        f"🎉 অভিনন্দন! নতুন রেফার থেকে আপনি {POINTS_PER_REFERRAL} পয়েন্ট পেয়েছেন!"
-                    )
+                    await context.bot.send_message(referred_by, f"🎉 নতুন রেফার! +{POINTS_PER_REFERRAL} পয়েন্ট")
                 except:
                     pass
         except:
@@ -185,365 +140,207 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not get_user(user_id):
         add_user(user_id, username)
-        update_points(user_id, 3)  # Welcome bonus
+        update_points(user_id, 3)
     
     ref_link = f"https://t.me/{context.bot.username}?start=ref_{user_id}"
     points = get_points(user_id)
-    
-    admin_cmds = ""
-    if is_admin(user_id):
-        admin_cmds = "\n\n🔐 ADMIN COMMANDS:\n" \
-                     "/admin - Admin Panel\n" \
-                     "/broadcast - সবাইকে SMS পাঠান\n" \
-                     "/stats - পরিসংখ্যান\n" \
-                     "/users - ইউজার লিস্ট\n" \
-                     "/addpoints [user_id] [points] - পয়েন্ট যোগ"
+    admin_cmds = "\n\n🔐 ADMIN:\n/admin /broadcast /stats /users /addpoints" if is_admin(user_id) else ""
     
     await update.message.reply_text(
-        f"👋 স্বাগতম {username}!\n\n"
-        f"💰 আপনার পয়েন্ট: {points}\n"
-        f"🔗 রেফার লিংক:\n`{ref_link}`\n\n"
-        f"📌 কমান্ডসমূহ:\n"
-        f"/sms +8801XXXXXXXXX মেসেজ - SMS পাঠান\n"
-        f"/balance - পয়েন্ট দেখুন\n"
-        f"/refer - রেফার লিংক\n"
-        f"/history - SMS হিস্টরি"
-        f"{admin_cmds}\n\n"
-        f"⚡ প্রতি রেফারে {POINTS_PER_REFERRAL} পয়েন্ট পাবেন!",
-        parse_mode='Markdown'
-    )
+        f"👋 স্বাগতম {username}!\n\n💰 পয়েন্ট: {points}\n🔗 রেফার:\n`{ref_link}`\n\n"
+        f"📌 কমান্ড:\n/sms +8801XXX মেসেজ\n/balance /refer /history{admin_cmds}\n\n⚡ প্রতি রেফারে {POINTS_PER_REFERRAL} পয়েন্ট!",
+        parse_mode='Markdown')
 
 async def send_sms(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     update_last_active(user_id)
-    
     if not await check_membership(update, context):
         return
     
     points = get_points(user_id)
     if points < POINTS_PER_SMS:
         ref_link = f"https://t.me/{context.bot.username}?start=ref_{user_id}"
-        await update.message.reply_text(
-            f"⚠️ পর্যাপ্ত পয়েন্ট নেই!\n\n"
-            f"💰 বর্তমান পয়েন্ট: {points}\n"
-            f"🔗 রেফার করুন:\n`{ref_link}`",
-            parse_mode='Markdown'
-        )
+        await update.message.reply_text(f"⚠️ পয়েন্ট নেই!\n\n💰 বর্তমান: {points}\n🔗 রেফার:\n`{ref_link}`", parse_mode='Markdown')
         return
     
     if len(context.args) < 2:
-        await update.message.reply_text(
-            "❌ সঠিক ফরম্যাট:\n"
-            "/sms +8801XXXXXXXXX আপনার মেসেজ\n\n"
-            "উদাহরণ:\n"
-            "/sms +8801712345678 Hello, this is a test message"
-        )
+        await update.message.reply_text("❌ Format: /sms +8801XXX মেসেজ")
         return
     
     to_number = context.args[0]
     message = " ".join(context.args[1:])
     
     try:
-        response = requests.post('https://textbelt.com/text', {
-            'phone': to_number,
-            'message': message,
-            'key': 'textbelt',
-        }, timeout=10)
-        
+        response = requests.post('https://textbelt.com/text', {'phone': to_number, 'message': message, 'key': 'textbelt'}, timeout=10)
         result = response.json()
         
         if result.get('success'):
             update_points(user_id, -POINTS_PER_SMS)
             new_balance = get_points(user_id)
             log_sms(user_id, to_number, message, 'success')
-            
-            await update.message.reply_text(
-                f"✅ SMS সফলভাবে পাঠানো হয়েছে!\n"
-                f"📱 নম্বর: {to_number}\n"
-                f"💰 বাকি পয়েন্ট: {new_balance}"
-            )
+            await update.message.reply_text(f"✅ SMS পাঠানো হয়েছে!\n📱 {to_number}\n💰 বাকি: {new_balance}")
         else:
             log_sms(user_id, to_number, message, 'failed')
-            await update.message.reply_text(
-                f"❌ SMS পাঠাতে ব্যর্থ!\n"
-                f"কারণ: {result.get('error', 'Unknown error')}\n\n"
-                f"💡 টিপস: TextBelt ফ্রি ভার্সন শুধুমাত্র US/Canada নম্বরে কাজ করে।"
-            )
+            await update.message.reply_text(f"❌ ব্যর্থ: {result.get('error', 'Unknown')}")
     except Exception as e:
         log_sms(user_id, to_number, message, 'error')
-        await update.message.reply_text(f"❌ এরর: {str(e)}")
+        await update.message.reply_text(f"❌ Error: {str(e)}")
 
 async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     points = get_points(user_id)
     ref_link = f"https://t.me/{context.bot.username}?start=ref_{user_id}"
-    
-    await update.message.reply_text(
-        f"💰 আপনার বর্তমান পয়েন্ট: {points}\n\n"
-        f"🔗 রেফার লিংক:\n`{ref_link}`\n\n"
-        f"📊 ১ পয়েন্ট = ১ SMS\n"
-        f"⚡ রেফার করে আরো পয়েন্ট পান!",
-        parse_mode='Markdown'
-    )
+    await update.message.reply_text(f"💰 পয়েন্ট: {points}\n\n🔗 রেফার:\n`{ref_link}`", parse_mode='Markdown')
 
 async def refer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     ref_link = f"https://t.me/{context.bot.username}?start=ref_{user_id}"
-    
-    await update.message.reply_text(
-        f"🔗 আপনার রেফার লিংক:\n`{ref_link}`\n\n"
-        f"✨ প্রতি রেফারে {POINTS_PER_REFERRAL} পয়েন্ট পাবেন!\n"
-        f"📲 বন্ধুদের সাথে শেয়ার করুন এবং পয়েন্ট অর্জন করুন।",
-        parse_mode='Markdown'
-    )
+    await update.message.reply_text(f"🔗 রেফার লিংক:\n`{ref_link}`\n\n✨ প্রতি রেফারে {POINTS_PER_REFERRAL} পয়েন্ট!", parse_mode='Markdown')
 
 async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT to_number, message, sent_date, status 
-        FROM sms_history WHERE user_id = ? 
-        ORDER BY sent_date DESC LIMIT 10
-    """, (user_id,))
+    cursor.execute("SELECT to_number, message, sent_date, status FROM sms_history WHERE user_id = ? ORDER BY sent_date DESC LIMIT 10", (user_id,))
     records = cursor.fetchall()
     conn.close()
     
     if not records:
-        await update.message.reply_text("📭 আপনার কোনো SMS হিস্টরি নেই।")
+        await update.message.reply_text("📭 কোনো হিস্টরি নেই")
         return
     
-    text = "📜 আপনার শেষ ১০টি SMS:\n\n"
+    text = "📜 শেষ ১০টি SMS:\n\n"
     for rec in records:
         emoji = "✅" if "success" in rec[3] else "❌"
-        msg_preview = rec[1][:30] + "..." if len(rec[1]) > 30 else rec[1]
-        text += f"{emoji} {rec[0]}\n📝 {msg_preview}\n🕐 {rec[2]}\n\n"
-    
+        text += f"{emoji} {rec[0]} - {rec[2]}\n"
     await update.message.reply_text(text)
 
-# ==================== ADMIN Commands ====================
+# ==================== Admin Commands ====================
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text("⛔ শুধুমাত্র Admin এই কমান্ড ব্যবহার করতে পারবেন!")
+        await update.message.reply_text("⛔ Admin only!")
         return
-    
     stats = get_stats()
-    
     await update.message.reply_text(
-        f"🔐 ADMIN PANEL\n"
-        f"━━━━━━━━━━━━━━━━\n\n"
-        f"👥 মোট ইউজার: {stats['users']}\n"
-        f"🆕 আজকের নতুন: {stats['today_users']}\n"
-        f"💰 মোট পয়েন্ট: {stats['points']}\n"
-        f"📱 পাঠানো SMS: {stats['sms_sent']}\n\n"
-        f"━━━━━━━━━━━━━━━━\n"
-        f"📌 কমান্ডসমূহ:\n"
-        f"/stats - বিস্তারিত পরিসংখ্যান\n"
-        f"/users - ইউজার লিস্ট (Top 20)\n"
-        f"/addpoints [user_id] [points] - পয়েন্ট যোগ\n"
-        f"/broadcast - সবাইকে SMS পাঠান"
-    )
+        f"🔐 ADMIN PANEL\n━━━━━━━━━━━━\n\n👥 ইউজার: {stats['users']}\n🆕 আজকের: {stats['today_users']}\n"
+        f"💰 পয়েন্ট: {stats['points']}\n📱 SMS: {stats['sms_sent']}\n\n"
+        f"📌 /stats /users /addpoints /broadcast")
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text("⛔ Admin only!")
         return
-    
     stats = get_stats()
-    
-    await update.message.reply_text(
-        f"📊 SYSTEM STATISTICS\n"
-        f"━━━━━━━━━━━━━━━━\n\n"
-        f"👥 মোট ইউজার: {stats['users']}\n"
-        f"🆕 আজকের নতুন ইউজার: {stats['today_users']}\n"
-        f"💰 মোট পয়েন্ট: {stats['points']}\n"
-        f"📱 মোট SMS পাঠানো: {stats['sms_sent']}\n\n"
-        f"━━━━━━━━━━━━━━━━\n"
-        f"📈 Average Points/User: {stats['points']//stats['users'] if stats['users'] > 0 else 0}"
-    )
+    await update.message.reply_text(f"📊 STATS\n\n👥 {stats['users']}\n🆕 {stats['today_users']}\n💰 {stats['points']}\n📱 {stats['sms_sent']}")
 
 async def users_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text("⛔ Admin only!")
         return
-    
     users = get_all_users()[:20]
-    
-    text = "👥 USER LIST (Top 20 by Points)\n━━━━━━━━━━━━━━━━\n\n"
+    text = "👥 TOP 20:\n\n"
     for idx, u in enumerate(users, 1):
-        text += f"{idx}. ID: `{u[0]}`\n   @{u[1] or 'No username'}\n   💰 {u[2]} points\n\n"
-    
-    await update.message.reply_text(text, parse_mode='Markdown')
+        text += f"{idx}. {u[0]} | @{u[1] or 'N/A'} | 💰{u[2]}\n"
+    await update.message.reply_text(text)
 
 async def add_points_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text("⛔ Admin only!")
         return
-    
     if len(context.args) != 2:
-        await update.message.reply_text(
-            "❌ সঠিক ফরম্যাট:\n"
-            "/addpoints [user_id] [points]\n\n"
-            "উদাহরণ:\n"
-            "/addpoints 123456789 50"
-        )
+        await update.message.reply_text("❌ Format: /addpoints USER_ID POINTS")
         return
     
     try:
         target_user = int(context.args[0])
         points = int(context.args[1])
-        
         if not get_user(target_user):
-            await update.message.reply_text("❌ ইউজার খুঁজে পাওয়া যায়নি!")
+            await update.message.reply_text("❌ User not found!")
             return
-        
         update_points(target_user, points)
-        
-        await update.message.reply_text(
-            f"✅ সফলভাবে {points} পয়েন্ট যোগ করা হয়েছে!\n"
-            f"👤 ইউজার ID: `{target_user}`\n"
-            f"💰 নতুন ব্যালেন্স: {get_points(target_user)}",
-            parse_mode='Markdown'
-        )
-        
+        await update.message.reply_text(f"✅ Added {points} points to {target_user}")
         try:
-            await context.bot.send_message(
-                target_user,
-                f"🎁 Admin আপনাকে {points} পয়েন্ট দিয়েছেন!\n"
-                f"💰 নতুন ব্যালেন্স: {get_points(target_user)}"
-            )
+            await context.bot.send_message(target_user, f"🎁 Admin gave you {points} points!")
         except:
             pass
-            
     except ValueError:
-        await update.message.reply_text("❌ ভুল ফরম্যাট! শুধুমাত্র সংখ্যা ব্যবহার করুন।")
+        await update.message.reply_text("❌ Invalid format!")
 
-# ==================== BROADCAST ====================
+# ==================== Broadcast ====================
 async def broadcast_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text("⛔ Admin only!")
         return ConversationHandler.END
-    
-    await update.message.reply_text(
-        "📢 BROADCAST SMS TO ALL USERS\n"
-        "━━━━━━━━━━━━━━━━\n\n"
-        "ফরম্যাট: +নম্বর | মেসেজ\n\n"
-        "উদাহরণ:\n"
-        "+8801712345678 | এটি সবার জন্য একটি টেস্ট মেসেজ\n\n"
-        "⚠️ নোট: যাদের পয়েন্ট আছে শুধু তাদের থেকেই SMS যাবে।\n"
-        "প্রত্যেকের ১ পয়েন্ট কাটা হবে।\n\n"
-        "❌ বাতিল করতে /cancel টাইপ করুন"
-    )
-    
+    await update.message.reply_text("📢 BROADCAST\n\nFormat: +নম্বর | মেসেজ\n\n/cancel to stop")
     return BROADCAST_MESSAGE
 
 async def broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message.text
-    
     if "|" not in message:
-        await update.message.reply_text(
-            "❌ ভুল ফরম্যাট!\n\n"
-            "সঠিক ফরম্যাট: +8801XXXXXXXXX | আপনার মেসেজ"
-        )
+        await update.message.reply_text("❌ Wrong format!")
         return BROADCAST_MESSAGE
     
     parts = message.split("|", 1)
     to_number = parts[0].strip()
     sms_text = parts[1].strip()
-    
     users = get_all_users()
     total = len(users)
     
-    await update.message.reply_text(
-        f"📤 {total} জন ইউজারের কাছে SMS পাঠানো শুরু হয়েছে...\n"
-        f"⏳ অনুগ্রহ করে অপেক্ষা করুন..."
-    )
+    await update.message.reply_text(f"📤 Sending to {total} users...")
     
     success = 0
     failed = 0
-    no_points = 0
-    
     for user in users:
         user_id = user[0]
         if get_points(user_id) >= POINTS_PER_SMS:
             try:
-                response = requests.post('https://textbelt.com/text', {
-                    'phone': to_number,
-                    'message': sms_text,
-                    'key': 'textbelt',
-                }, timeout=5)
-                
+                response = requests.post('https://textbelt.com/text', {'phone': to_number, 'message': sms_text, 'key': 'textbelt'}, timeout=5)
                 if response.json().get('success'):
                     update_points(user_id, -POINTS_PER_SMS)
                     log_sms(user_id, to_number, sms_text, 'broadcast_success')
                     success += 1
                 else:
                     failed += 1
-                    log_sms(user_id, to_number, sms_text, 'broadcast_failed')
             except:
                 failed += 1
         else:
-            no_points += 1
+            failed += 1
     
-    await update.message.reply_text(
-        f"✅ BROADCAST সম্পন্ন হয়েছে!\n"
-        f"━━━━━━━━━━━━━━━━\n\n"
-        f"📊 মোট ইউজার: {total}\n"
-        f"✅ সফল: {success}\n"
-        f"❌ ব্যর্থ: {failed}\n"
-        f"⚠️ পয়েন্ট নেই: {no_points}\n\n"
-        f"📱 নম্বর: {to_number}\n"
-        f"📝 মেসেজ: {sms_text[:50]}..."
-    )
-    
+    await update.message.reply_text(f"✅ COMPLETE!\n\nTotal: {total}\n✅ {success}\n❌ {failed}")
     return ConversationHandler.END
 
 async def cancel_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("❌ Broadcast বাতিল করা হয়েছে।")
+    await update.message.reply_text("❌ Cancelled")
     return ConversationHandler.END
 
-# ==================== MAIN ====================
+# ==================== Main ====================
 def main():
-    print("━━━━━━━━━━━━━━━━━━━━━━━━")
+    print("━━━━━━━━━━━━━━━━━━━━")
     print("🤖 SMS REFER BOT")
-    print("━━━━━━━━━━━━━━━━━━━━━━━━")
-    print("🔄 Initializing database...")
-    init_db()
-    
-    print("🔧 Configuring bot...")
+    print("━━━━━━━━━━━━━━━━━━━━")
     print(f"📢 Channel: {CHANNEL_ID}")
     print(f"👥 Group: {GROUP_ID}")
-    print(f"👨‍💼 Admin IDs: {ADMIN_IDS}")
+    print(f"👨‍💼 Admins: {ADMIN_IDS}")
+    print(f"⚡ Points/Referral: {POINTS_PER_REFERRAL}")
+    print(f"💰 Points/SMS: {POINTS_PER_SMS}")
+    print("━━━━━━━━━━━━━━━━━━━━")
     
-    print("🚀 Starting bot...")
+    init_db()
     app = Application.builder().token(BOT_TOKEN).build()
     
-    # User commands
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("sms", send_sms))
     app.add_handler(CommandHandler("balance", balance))
     app.add_handler(CommandHandler("refer", refer))
     app.add_handler(CommandHandler("history", history))
-    
-    # Admin commands
     app.add_handler(CommandHandler("admin", admin_panel))
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("users", users_list))
     app.add_handler(CommandHandler("addpoints", add_points_command))
     
-    # Broadcast handler
     broadcast_handler = ConversationHandler(
         entry_points=[CommandHandler("broadcast", broadcast_start)],
-        states={
-            BROADCAST_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_message)]
-        },
-        fallbacks=[CommandHandler("cancel", cancel_broadcast)]
-    )
+        states={BROADCAST_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_message)]},
+        fallbacks=[CommandHandler("cancel", cancel_broadcast)])
     app.add_handler(broadcast_handler)
     
-    print("✅ Bot is running successfully!")
-    print("━━━━━━━━━━━━━━━━━━━━━━━━\n")
+    print("✅ Bot is running!")
     app.run_polling()
 
 if __name__ == "__main__":
